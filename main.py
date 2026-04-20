@@ -1,8 +1,7 @@
 import os
 import asyncio
-import threading
 import logging
-from flask import Flask
+from aiohttp import web
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
 
@@ -10,45 +9,43 @@ from telegram.ext import Application, CommandHandler, ContextTypes
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# --- Настройки из переменных окружения Render ---
+# --- Настройки из переменных окружения ---
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 OWNER_ID = int(os.environ.get("OWNER_ID", "0"))
+PORT = int(os.environ.get("PORT", "8080"))
 
 # --- Простой веб-сервер для проверки работоспособности ---
-app = Flask(__name__)
+async def handle_health(request):
+    return web.Response(text="OK")
 
-@app.route('/')
-def home():
-    return "Бот работает!"
-
-@app.route('/health')
-def health():
-    return "OK", 200
-
-def run_web_server():
-    # Получаем порт, который выделил Render
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host='0.0.0.0', port=port)
+async def run_web_server():
+    app = web.Application()
+    app.router.add_get("/", handle_health)
+    app.router.add_get("/health", handle_health)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "0.0.0.0", PORT)
+    await site.start()
+    logger.info(f"Веб-сервер запущен на порту {PORT}")
 
 # --- Команды бота ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"👋 Привет! Бот работает.\nТвой ID: {update.effective_user.id}")
 
-async def main_bot():
+async def main():
     if not BOT_TOKEN:
         raise ValueError("BOT_TOKEN не задан!")
-    application = Application.builder().token(BOT_TOKEN).build()
-    application.add_handler(CommandHandler("start", start))
+
+    # Запускаем веб-сервер
+    await run_web_server()
+
+    # Создаём и запускаем бота
+    app = Application.builder().token(BOT_TOKEN).build()
+    app.add_handler(CommandHandler("start", start))
     logger.info("Бот запущен!")
-    # Запускаем бота в режиме polling
-    await application.run_polling()
 
-def run_bot():
-    asyncio.run(main_bot())
+    # Запускаем polling (бот будет работать в том же event loop)
+    await app.run_polling()
 
-# --- Точка входа ---
 if __name__ == "__main__":
-    # Запускаем веб-сервер в отдельном потоке
-    threading.Thread(target=run_web_server).start()
-    # Запускаем бота в главном потоке
-    run_bot()
+    asyncio.run(main())
